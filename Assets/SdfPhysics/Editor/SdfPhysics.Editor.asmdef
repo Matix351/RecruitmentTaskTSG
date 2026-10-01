@@ -1,0 +1,5 @@
+{
+  "name": "SdfPhysics.Editor",
+  "references": ["SdfPhysics.Runtime", "Unity.Mathematics", "Unity.Collections", "Unity.RenderPipelines.Universal.Runtime"],
+  "includePlatforms": ["Editor"]
+}

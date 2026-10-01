@@ -1,0 +1,5 @@
+{
+  "name": "SdfPhysics.Runtime",
+  "references": ["Unity.Burst", "Unity.Collections", "Unity.Mathematics", "Unity.InputSystem", "Unity.RenderPipelines.Universal.Runtime"],
+  "autoReferenced": true
+}

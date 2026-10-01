@@ -1,0 +1,21 @@
+Validation date: 2026-09-24
+Unity: 6000.3.11f1, release Windows x64 player, Mono scripting backend, Burst AOT enabled.
+CPU: AMD Ryzen 5 5600G with Radeon Graphics
+GPU used by player: NVIDIA GeForce RTX 5060 Ti
+Resolution: 1280 x 720
+
+Editor correctness validation passed 35,780 assertions. Windows Smart App Control blocked
+the editor's dynamically generated Burst JIT DLL (Windows error 4551), so the editor
+correctness run used the managed job fallback. No security settings were changed.
+
+The standalone AOT player reports native Burst execution TRUE through a BurstDiscard
+probe. Benchmark results therefore use native Burst, not the editor fallback.
+
+Rendering is explicitly submitted to an offscreen render target and synchronized with
+a one-pixel GPU readback on every frame. A screenshot verifies real geometry rendering.
+These timings include an extra GPU completion/readback cost, exclude IMGUI/presentation,
+and should not be described as normal windowed FPS or isolated GPU execution times.
+Earlier hidden-window trials skipped rendering; those timings were discarded.
+
+The ordinary demo uses a camera and on-screen IMGUI readout. The offscreen path is used
+only when both -batchmode and --sdf-benchmark are supplied to the release player.
