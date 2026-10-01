@@ -1,1 +1,1 @@
-PASS: 35,780 assertions. Signs, boundary, 500 m/s vertical and 1000 m/s lateral impacts, initial penetration, 10,000-ball settling and sleeping stability.
+PASS: 35,792 assertions. Scene references and defaults, signs, boundary, 500 m/s vertical and 1000 m/s lateral impacts, initial penetration, 10,000-ball settling and sleeping stability.

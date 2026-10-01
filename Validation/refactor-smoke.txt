@@ -1,0 +1,1 @@
+PASS: Play-mode startup and migrated references; configured cap 15000; uncapped allocation of 640000 balls; halving; odd rounding; minimum one; reset to 10000.

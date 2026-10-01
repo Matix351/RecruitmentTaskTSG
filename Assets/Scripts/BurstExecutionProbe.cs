@@ -4,18 +4,25 @@ using Unity.Jobs;
 
 namespace SdfPhysics
 {
-    // Report actual native execution, rather than assuming the Burst package being present is enough.
+    // Burst removes markManaged, so the result tells us whether this job ran as native code.
     [BurstCompile(CompileSynchronously = true)]
     public struct BurstExecutionProbe : IJob
     {
         public NativeArray<int> Result;
+
         public void Execute()
         {
             int native = 1;
-            MarkManaged(ref native);
+            markManaged(ref native);
             Result[0] = native;
         }
-        [BurstDiscard] static void MarkManaged(ref int native) { native = 0; }
+
+        [BurstDiscard]
+        private static void markManaged(ref int native)
+        {
+            native = 0;
+        }
+
         public static bool Run()
         {
             using var result = new NativeArray<int>(1, Allocator.TempJob);

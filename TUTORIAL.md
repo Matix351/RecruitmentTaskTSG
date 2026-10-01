@@ -34,15 +34,15 @@ The CPU computes motion. The GPU draws the result. GPU instancing does not mean 
 
 ## 2. First run: connect the scene to the code
 
-Open `Assets/Scenes/SdfPhysics.unity` and press Play. Select **SDF Ball Simulation** in the Hierarchy. Its `BallDemo` component references the baked volume, sphere mesh, and ball material.
+Open `Assets/Scenes/SdfPhysics.unity` and press Play. The demo starts with 10,000 balls. Select **SDF Ball Simulation** in the Hierarchy. Its `BallDemo` component references the baked volume, sphere mesh, and ball material.
 
 Press **R** to reset the rain. Wait for the balls to settle and watch the sleeping count increase. Press **Space** to pause. Balls overlapping one another is intentional: this project only resolves ball-versus-static-geometry contacts.
 
-Stop Play mode and set the component's ball count to 100 for an easier view. Enter Play again. Set it back to 10,000 when finished. The runtime count buttons call `SetCount`; editing the count field directly during Play does not perform the required array resizing.
+Stop Play mode and set the component's **Ball Count** to 100 for an easier view. Enter Play again. Set it back to 10,000 when finished. The runtime **x2** and **/2** buttons double or halve the current count, with halving rounded down to a minimum of 1. **Max Ball Count** sets an optional upper limit; 0 is the default and means no user-defined cap. Memory and graphics-buffer limits still apply. Both buttons call `SetCount`; editing the count field directly during Play does not perform the required array resizing.
 
 Read the files in this order:
 
-| File under `Assets/SdfPhysics/` | What to learn from it |
+| File under `Assets/` | What to learn from it |
 | --- | --- |
 | `Runtime/BallDemo.cs` | Startup, ownership, scheduling, upload, draw, cleanup |
 | `Runtime/SdfVolume.cs` | Loading the field and sampling it |
@@ -53,7 +53,9 @@ Read the files in this order:
 | `Editor/SimulationValidation.cs` | What the automated checks actually establish |
 | `Runtime/BurstExecutionProbe.cs` | How native Burst execution is detected |
 
-`SdfGeometry` is an authoring tag identifying a plane or cylinder. The `.asmdef` files separate runtime code from editor code and declare package dependencies. Editor-only asset creation and build APIs do not belong in the player.
+`SdfGeometry` is an authoring tag identifying a plane or cylinder through its `Shape` property and `geometryShape` enum (`PLANE` or `CYLINDER`). The `.asmdef` files separate runtime code from editor code and declare package dependencies. Editor-only asset creation and build APIs do not belong in the player.
+
+Names tell you how a member is used: `_ballCount` is a private serialized field, `mPositions` is private runtime state, and `BallCount` is the public property. Private static fields use `_sCamelCase`; public static fields use `sCamelCase`. Public methods such as `ResetBalls` use PascalCase, while private helpers such as `disposeBalls` use camelCase. Unity callbacks keep their required spelling, including `OnEnable`, `Update`, and `OnDisable`.
 
 ## 3. A signed distance field in numbers
 
@@ -140,7 +142,7 @@ These are sample points at grid vertices. There are 176 intervals across 177 sam
 
 Every distance is a 4-byte float. Total storage is `177 * 129 * 177 * 4 = 16,165,764 bytes`, about 15.42 MiB.
 
-`SceneSdf.bytes` contains the float values; `SceneSdf.asset` contains the origin, dimensions, spacing, and reference to that data. Preserve their `.meta` files so Unity retains asset references.
+`Assets/Baked/SceneSdf.bytes` contains the float values; `SceneSdf.asset` contains the origin, dimensions, spacing, and reference to that data. `SdfVolume` stores these in private serialized fields and exposes read-only properties; the baker assigns them through `Initialize`. Preserve their `.meta` files so Unity retains asset references.
 
 **Experiment:** Outside Play mode, move the cylinder 1 m along X, save the scene, and enter Play without baking. Contacts remain at the old location. Stop, choose **SDF Physics > Bake open scene**, and try again. Restore the cylinder to `(0, 1, 0)`, save, and rebake afterward. The validation tests assume the default geometry.
 
@@ -155,24 +157,24 @@ A native array is a handle to unmanaged memory. Copying the `SdfGrid` struct int
 `Sample` converts a world position to grid coordinates:
 
 ```csharp
-float3 g = (p - Origin) / CellSize;
-int3 c = math.clamp((int3)math.floor(g), 0, Size - 2);
-float3 t = g - c;
+float3 gridPosition = (position - Origin) / CellSize;
+int3 cell = math.clamp((int3)math.floor(gridPosition), 0, Size - 2);
+float3 fraction = gridPosition - cell;
 ```
 
-`c` identifies the lower corner of the containing cell. `t` gives the fractional position inside it. For `g.x = 12.25`, the point lies one quarter of the way from sample 12 to sample 13.
+`cell` identifies the lower corner of the containing cell. `fraction` gives the fractional position inside it. For `gridPosition.x = 12.25`, the point lies one quarter of the way from sample 12 to sample 13.
 
 Clamping the cell index to `Size - 2` leaves room for the upper corner. At the maximum face, the last cell is selected with interpolation weight 1. That prevents an out-of-range array access.
 
 The 3D grid is flattened into one array:
 
 ```csharp
-int i = c.x + Size.x * (c.y + Size.y * c.z);
+int index = cell.x + Size.x * (cell.y + Size.y * cell.z);
 ```
 
 Moving one sample in X adds 1. Moving one in Y adds `Size.x`. Moving one in Z adds `Size.x * Size.y`. These strides match the baker's X-inside-Y-inside-Z loop order.
 
-The letters `a, b, d, e, f, h, j, k` are the eight cell corners. The code blends along X, then Y, then Z. This is **trilinear interpolation**. Linear interpolation is just:
+The eight corner values have names such as `value000` and `value100`; the three digits give each corner's X, Y, and Z offsets from the cell origin. The code blends along X, then Y, then Z. This is **trilinear interpolation**. Linear interpolation is just:
 
 ```text
 lerp(a, b, t) = a + t * (b - a)
@@ -180,7 +182,7 @@ lerp(a, b, t) = a + t * (b - a)
 
 For example, blending `0.2` and `0.4` at `t = 0.25` gives `0.25`.
 
-The gradient differentiates those same blends. Along X, `b - a` is one edge's distance change; blending the parallel edge differences gives the local X derivative. Dividing by cell size converts “change per cell” into “change per metre.” The Y and Z components follow the same idea.
+The gradient differentiates those same blends. Along X, `value100 - value000` is one edge's distance change; blending the parallel edge differences gives the local X derivative. Dividing by cell size converts “change per cell” into “change per metre.” The Y and Z components follow the same idea.
 
 This is one eight-value sampling stencil that returns both distance and gradient. It is not literally one float read, and collision can call it multiple times during a substep.
 
@@ -201,9 +203,9 @@ The CPU simulation has 32 bytes of ball state per ball, or about 320 KB for 10,0
 `IJobParallelFor` asks Unity to run `Execute(index)` for every ball. Each execution changes only its own array entries and reads shared immutable field data. This independence is what permits parallel execution without balls racing to modify one another.
 
 ```csharp
-handle = new BallSimulationJob { /* arrays and settings */ }
-    .Schedule(ballCount, 128);
-handle.Complete();
+mHandle = new BallSimulationJob { /* arrays and settings */ }
+    .Schedule(_ballCount, 128);
+mHandle.Complete();
 ```
 
 128 is the inner-loop batch size parameter, not the number of threads. Unity distributes the work across available workers. `Complete` makes the updated arrays safe for subsequent upload and reuse. Immediately completing still allows parallel execution inside the job, but provides little opportunity to overlap it with unrelated main-thread work.
@@ -214,7 +216,7 @@ Jobs supply scheduling and concurrency. Burst compiles compatible C# to optimize
 
 ## 7. Rendering frames and simulation ticks are different
 
-Read the accumulator section of `BallDemo.Update`.
+Read `BallDemo.simulate`, which `Update` calls once per rendered frame.
 
 The simulation tick is `1 / 120 s`, about 8.33 ms. A 60 fps rendering frame lasts about 16.67 ms, so it normally needs two simulation ticks. At 240 fps, some frames need no simulation tick at all.
 
@@ -237,7 +239,7 @@ Read `BallSimulationJob.Execute` from top to bottom.
 The job copies one ball's data into local variables. A sleeping ball returns immediately. An escaped ball is respawned. Each tick then changes velocity:
 
 ```csharp
-v.y -= 9.81f * DeltaTime;
+velocity.y -= 9.81f * DeltaTime;
 ```
 
 At 120 Hz, gravity changes vertical velocity by approximately `-0.08175 m/s` per tick. Movement subsequently uses that updated velocity: a semi-implicit integration step.
@@ -249,9 +251,9 @@ An endpoint-only test would move the ball first and ask whether its final positi
 This implementation repeatedly samples clearance and advances by a limited distance:
 
 ```csharp
-float dt = math.min(remaining, gap * 0.55f / math.max(speed, 0.00001f));
-p += v * dt;
-remaining -= dt;
+float stepTime = math.min(remainingTime, gap * 0.55f / math.max(speed, 0.00001f));
+position += velocity * stepTime;
+remainingTime -= stepTime;
 ```
 
 If clearance is 0.2 m and speed is 10 m/s, the clearance-based time limit is `0.2 * 0.55 / 10 = 0.011 s`. The ball never uses more than the tick's remaining time.
@@ -269,19 +271,19 @@ Near contact, the gradient becomes a unit normal. Position is moved outward if n
 Velocity is separated into normal and tangential parts:
 
 ```csharp
-float vn = math.dot(v, normal);
-float3 tangent = v - vn * normal;
+float normalSpeed = math.dot(velocity, normal);
+float3 tangent = velocity - normalSpeed * normal;
 ```
 
 For a floor normal `(0, 1, 0)` and velocity `(2, -3, 0)`:
 
 ```text
-normal speed vn = -3
+normalSpeed     = -3
 normal velocity = (0, -3, 0)
 tangent velocity = (2, 0, 0)
 ```
 
-A negative `vn` means the ball is approaching the surface. The response reverses and reduces that component. A fast impact uses restitution 0.32, so the upward speed in this example becomes `0.96 m/s`. Impacts slower than 0.6 m/s use zero restitution to avoid perpetual tiny bounces.
+A negative `normalSpeed` means the ball is approaching the surface. The response reverses and reduces that component. A fast impact uses restitution 0.32, so the upward speed in this example becomes `0.96 m/s`. Impacts slower than 0.6 m/s use zero restitution to avoid perpetual tiny bounces.
 
 Friction reduces tangential speed by an amount based on the normal impulse. In this example, the permitted reduction is `0.65 * 1.32 * 3 = 2.574 m/s`, enough to remove all 2 m/s of tangential motion. The clamp prevents friction from reversing the tangent direction.
 
@@ -300,8 +302,8 @@ After 0.4 s of qualifying contact, velocity is zeroed and future executions retu
 Read the upload/draw lines in `BallDemo.Update` and `InstancedBalls.shader`.
 
 ```csharp
-buffer.SetData(positions);
-Graphics.RenderMeshPrimitives(renderParams, ballMesh, 0, ballCount);
+mBuffer.SetData(mPositions);
+Graphics.RenderMeshPrimitives(mRenderParams, _ballMesh, 0, _ballCount);
 ```
 
 The GPU receives one buffer of `(x, y, z, radius)` entries and one mesh to repeat. `SV_InstanceID` identifies which ball each mesh instance represents:
@@ -327,7 +329,7 @@ The phrase “one draw” applies to the balls' forward pass. The ground, cylind
 
 It checks field signs, a flat-ground gradient, boundaries, high-speed impacts, recovery from a small initial penetration, and settling of 10,000 balls. The rain test runs `300 * 8 / 120 = 20` simulated seconds and requires at least 99% to sleep. It also checks exact position stability for sleeping balls.
 
-The reported 35,780 assertions include repeated checks over balls and steps; they are not 35,780 independently designed scenarios. Penetration checks mostly query the same sampled field used by the solver. They do not exhaustively establish agreement with the visible mesh at every corner, arbitrary initial condition, or transform.
+The reported 35,792 assertions include repeated checks over balls and steps, plus scene-reference and default-setting checks added during the naming refactor. They are not 35,792 independently designed scenarios. Penetration checks mostly query the same sampled field used by the solver. They do not exhaustively establish agreement with the visible mesh at every corner, arbitrary initial condition, or transform.
 
 The extreme-impact tests check the immediate collision, then reset to a normal zero-velocity drop for the settling check. An extreme bounce may leave the finite volume and trigger a legitimate respawn, so demanding the original landing location after that would test the wrong behaviour.
 
@@ -345,12 +347,12 @@ Make one change at a time and restore the baseline before running the default va
 
 | Experiment | Change | What to observe or predict |
 | --- | --- | --- |
-| More visible balls | Set `ballCount` to 100 before Play | Individual bounces and cylinder contacts become easier to follow |
+| More visible balls | Set **Ball Count** (`_ballCount`) to 100 before Play | Individual bounces and cylinder contacts become easier to follow |
 | Larger balls | Set radius to 0.12, then reset if already playing | Flat-ground centre height should become approximately 0.122 m |
 | No bounce | Temporarily make `bounce` zero in `Execute` | Balls still collide, but impacts no longer rebound |
 | Less friction | Temporarily change 0.65 in the tangent formula to 0.1 | Balls with tangential velocity slide longer; a straight vertical drop is a poor friction experiment |
 | Longer activity | Temporarily raise `SleepDelay` from 0.4 to 5 | Sleeping count rises later; fixed low-speed response may already look stationary |
-| More instances | Use the 100,000 button | Submission remains one ball draw, but upload and geometry work grow |
+| More instances | Press **x2** to double the count; use **/2** to reduce it | Submission remains one ball draw, but upload and geometry work grow |
 | Move the cylinder | Move, test without baking, then bake | Demonstrates the separation between visible geometry and collision data |
 
 For a deliberate sliding experiment, temporarily assign an X velocity such as `new float3(2, 0, 0)` in `ResetBalls` instead of zero. Reset to apply it. Balls can slide off the finite ground and recycle.
